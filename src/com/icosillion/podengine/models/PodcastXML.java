@@ -1,8 +1,12 @@
 package com.icosillion.podengine.models;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.Reader;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
@@ -13,10 +17,20 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javax.xml.XMLConstants;
+import javax.xml.transform.Source;
+import javax.xml.transform.stream.StreamSource;
+import javax.xml.validation.Schema;
+import javax.xml.validation.SchemaFactory;
+import javax.xml.validation.Validator;
+
+import org.apache.commons.io.ByteOrderMark;
+import org.apache.commons.io.input.BOMInputStream;
 import org.dom4j.Document;
 import org.dom4j.DocumentException;
 import org.dom4j.DocumentHelper;
 import org.dom4j.Element;
+import org.xml.sax.SAXException;
 
 import com.icosillion.podengine.exceptions.MalformedFeedException;
 
@@ -25,17 +39,19 @@ public class PodcastXML implements Podcast {
 	protected String xmlData;
 	protected Document document;
 	protected URL feedURL;
+	
 	//TODO Add support for HTTP basic-auth
 	
 	protected PodcastXML() {
 	}
 	
-	public PodcastXML(URL feed) {
+	//Original code no BOM, has errors
+	/*public PodcastXML(URL feed) {
 		this.feedURL = feed;
 		URLConnection connection;
 		try {
 			connection = feed.openConnection();
-			connection.connect();
+			connection.connect(); 
 			this.xmlData = "";
 			BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
 			String line;
@@ -48,6 +64,80 @@ public class PodcastXML implements Podcast {
 			e.printStackTrace();
 		} catch (DocumentException e) {
 			e.printStackTrace();
+		}
+	}*/
+	
+	private boolean validateXMLForPodcastFeed(InputStream inputStream){
+		Source xmlFile = null;
+		boolean wasParseAble = false;
+		try {
+			URL schemaFile = new URL("http://www.w3.org/2001/xml.xsd");
+			xmlFile = new StreamSource(inputStream);
+			SchemaFactory schemaFactory = SchemaFactory
+			    .newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
+			Schema schema = schemaFactory.newSchema(schemaFile);
+			Validator validator = schema.newValidator();
+			
+			validator.validate(xmlFile);
+			wasParseAble = true;
+			System.out.println(xmlFile.getSystemId() + " is valid");
+		} catch (SAXException e) {
+		  System.out.println(xmlFile.getSystemId() + " is NOT valid");
+		  System.out.println("Reason: " + e.getLocalizedMessage());
+		} catch (MalformedURLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return wasParseAble;
+	}
+	
+	//Strangelove to BOM fix
+	public PodcastXML(URL feed){
+	    
+		this.feedURL = feed;
+		URLConnection connection;
+		InputStreamReader inputStreamReader = null;
+		BufferedReader reader  = null;
+		try {
+			connection = feed.openConnection();
+			connection.connect();
+			this.xmlData = "";
+			
+			BOMInputStream bOMInputStream = new BOMInputStream(connection.getInputStream());
+		    ByteOrderMark bom = bOMInputStream.getBOM();
+		    String charsetName = bom == null ? "UTF-8" : bom.getCharsetName();
+		    inputStreamReader = new InputStreamReader(new BufferedInputStream(bOMInputStream), charsetName);
+		    //use reader
+			
+			reader = new BufferedReader(inputStreamReader);
+			
+			//TODO: check valid xml
+						
+			String line;
+			while((line = reader.readLine()) != null) {
+				this.xmlData += line + "\n";
+			}
+			reader.close();
+			
+			//System.out.println("XML Data is " + this.xmlData.substring(0, 100));
+			this.document = DocumentHelper.parseText(this.xmlData);
+		} catch (IOException e) {
+			e.printStackTrace();
+		} catch (DocumentException e) {
+			e.printStackTrace();
+		}
+		finally{
+			try {
+				inputStreamReader.close();
+				reader.close();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
 		}
 	}
 	
@@ -383,7 +473,16 @@ public class PodcastXML implements Podcast {
 			//Enclosure
 			if(item.element("enclosure") != null) {
 				episode.setMediaLocation(new URL(item.element("enclosure").attributeValue("url")));
-				episode.setMediaLength(Integer.valueOf(item.element("enclosure").attributeValue("length")));
+				
+				String lengthUnparsed = item.element("enclosure").attributeValue("length");
+				if (lengthUnparsed != null && (!lengthUnparsed.equals(""))){
+					lengthUnparsed = lengthUnparsed.trim();
+					//System.out.println("Length as string is " + lengthUnparsed);
+					
+					//Only set if its not equal to null, otherwise NPE 
+					episode.setMediaLength(Integer.valueOf(lengthUnparsed));
+				}
+				
 				episode.setMediaType(item.element("enclosure").attributeValue("type"));
 			}
 			
@@ -397,7 +496,10 @@ public class PodcastXML implements Podcast {
 			
 			//Source
 			if(item.element("source") != null) {
-				episode.setSourceLink(new URL(item.element("source").attributeValue("url")));
+				String sourceUrl = item.element("source").attributeValue("url");
+				if (sourceUrl != null){
+					episode.setSourceLink(new URL(sourceUrl));
+				}
 				episode.setSourceName(item.element("source").attributeValue("name"));
 			}
 			
@@ -494,4 +596,5 @@ public class PodcastXML implements Podcast {
 	public PodcastNative getNativeCopy() {
 		return new PodcastNative(this);
 	}
+
 }
